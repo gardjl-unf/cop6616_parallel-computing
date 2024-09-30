@@ -26,7 +26,7 @@ typedef struct {
  * @param rows: The number of rows in the sub-matrix
  * @param cols: The number of columns in the matrix (same as the length of the vector)
  */
-void local_matrix_vector_product(double* local_matrix, double* vector, double* local_result, int rows, int cols) {
+void local_matrix_vector_product(int* local_matrix, int* vector, int* local_result, int rows, int cols) {
     for (int i = 0; i < rows; i++) {
         local_result[i] = 0.0;
         for (int j = 0; j < cols; j++) {
@@ -42,13 +42,6 @@ void seed_random() {
     read(fd, &seed, sizeof(seed));
     close(fd);
     srandom(seed);
-}
-
-/** Generate a random double between 0 and MAX
- * @return: A random double
- */
-double random_double() {
-    return ((double) random() / (double) RAND_MAX * MAX);
 }
 
 /** Calculate time in seconds
@@ -71,7 +64,7 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);  // Get the rank of the process
     MPI_Comm_size(MPI_COMM_WORLD, &size);  // Get the total number of processes
 
-    unsigned long long m;
+    unsigned int m;
     int num_runs;
     if (argc < 3) {
         if (rank == 0) {
@@ -81,11 +74,11 @@ int main(int argc, char** argv) {
         return -1;
     }
 
-    sscanf(argv[1], "%llu", &m);
+    sscanf(argv[1], "%d", &m);
     sscanf(argv[2], "%d", &num_runs);
 
     // Allocate memory for the vector (this will be used by all processes)
-    double* vector = (double*) malloc(m * sizeof(double));
+    int* vector = (int*) malloc(m * sizeof(int));
     if (!vector) {
         fprintf(stderr, "Memory allocation failed: vector!\n");
         MPI_Finalize();
@@ -93,12 +86,12 @@ int main(int argc, char** argv) {
     }
 
     // Root process initializes the matrix and the vector
-    double* matrix = NULL;
-    double* result = NULL;
+    int* matrix = NULL;
+    int* result = NULL;
 
     if (rank == 0) {
-        matrix = (double*) malloc(m * m * sizeof(double));
-        result = (double*) malloc(m * sizeof(double));
+        matrix = (int*) malloc(m * m * sizeof(int));
+        result = (int*) malloc(m * sizeof(int));
 
         if (!matrix || !result) {
             fprintf(stderr, "Memory allocation failed: matrix/result!\n");
@@ -110,16 +103,16 @@ int main(int argc, char** argv) {
         seed_random();
         for (int i = 0; i < m; i++) {
             for (int j = 0; j < m; j++) {
-                matrix[i * m + j] = random_double();
+                matrix[i * m + j] = rand();
             }
         }
         for (int i = 0; i < m; i++) {
-            vector[i] = random_double();
+            vector[i] = rand();
         }
     }
 
     // Broadcast the vector to all processes
-    MPI_Bcast(vector, m, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(vector, m, MPI_INT, 0, MPI_COMM_WORLD);
 
     // Determine rows per process and handle uneven row distribution
     int rows_per_proc = m / size;  // Base number of rows each process will handle
@@ -145,11 +138,11 @@ int main(int argc, char** argv) {
 
     // Allocate memory for the local matrix and local result
     int local_rows = recv_counts[rank];  // Number of rows for this process
-    double* local_matrix = (double*) malloc(local_rows * m * sizeof(double));
-    double* local_result = (double*) malloc(local_rows * sizeof(double));
+    int* local_matrix = (int*) malloc(local_rows * m * sizeof(int));
+    int* local_result = (int*) malloc(local_rows * sizeof(int));
 
     // Scatter the rows of the matrix to each process
-    MPI_Scatterv(matrix, send_counts, displs, MPI_DOUBLE, local_matrix, local_rows * m, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Scatterv(matrix, send_counts, displs, MPI_INT, local_matrix, local_rows * m, MPI_INT, 0, MPI_COMM_WORLD);
 
     // Run the matrix-vector product multiple times
     Stopwatch stopwatches;

@@ -5,8 +5,8 @@
 #include <time.h>
 #include <string.h>
 
-// gcc q1.c -o q1
-// ./q1 25000 100
+// gcc q1s.c -o q1s
+// ./q1s 25000 100
 
 #define MAX 100000.0
 
@@ -26,8 +26,8 @@ typedef struct {
  * @param cols: The number of columns in the matrix
  * @return: The result of the matrix-vector multiplication
  */
-void matrix_vector_product(double* matrix, double* vector, double* result, int rows, int cols) {
-    memset(result, 0, rows * sizeof(double));  // Zero out the result array
+void matrix_vector_product(int* matrix, int* vector, int* result, int rows, int cols) {
+    memset(result, 0, rows * sizeof(int));  // Zero out the result array
 
     // Perform matrix-vector multiplication
     for (int i = 0; i < rows; i++) {
@@ -44,13 +44,6 @@ void seed_random() {
     read(fd, &seed, sizeof(seed));
     close(fd);
     srandom(seed);
-}
-
-/** Generate a random double between 0 and MAX
- * @return: A random double
- */
-double random_double() {
-    return ((double) random() / (double) RAND_MAX * MAX);
 }
 
 /** Calculate time in seconds
@@ -81,9 +74,9 @@ int main(int argc, char** argv) {
     sscanf(argv[2], "%d", &num_runs);
 
     // Dynamically allocate memory for matrix, vector, and result
-    double* matrix = (double*) malloc(m * m * sizeof(double));
-    double* vector = (double*) malloc(m * sizeof(double));
-    double* result = (double*) malloc(m * sizeof(double));
+    int* matrix = (int*) malloc(m * m * sizeof(int));
+    int* vector = (int*) malloc(m * sizeof(int));
+    int* result = (int*) malloc(m * sizeof(int));
 
     if (!matrix || !vector || !result) {
         fprintf(stderr, "Memory allocation failed: matrices/vector!\n");
@@ -93,16 +86,16 @@ int main(int argc, char** argv) {
     // Seed the random number generator
     seed_random();
 
-    // Fill the matrix with random doubles between 0 and MAX
+    // Fill the matrix with random integers between 0 and RAND_MAX
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < m; j++) {
-            matrix[i * m + j] = random_double();
+            matrix[i * m + j] = rand();
         }
     }
 
-    // Fill the vector with random doubles between 0 and MAX
+    // Fill the vector with random integers between 0 and RAND_MAX
     for (int i = 0; i < m; i++) {
-        vector[i] = random_double();
+        vector[i] = rand();
     }
 
     // Declare our timer variables
