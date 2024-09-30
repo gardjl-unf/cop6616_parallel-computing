@@ -3,8 +3,9 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <time.h>
+#include <string.h>
 
-// gcc -lm q1s.c -o q1s
+// gcc -lm q1.c -o q1
 
 #define MAX 100000.0
 
@@ -12,6 +13,7 @@
 typedef struct {
     struct timespec start;
     struct timespec stop;
+    double time;
 } Stopwatch;
 
 /**
@@ -21,26 +23,18 @@ typedef struct {
  * @param m: The dimensions of the matrix and vector
  * @return: The result of the matrix-vector multiplication
  */
-double* matrix_vector_product(double* matrix, double* vector, int m) {
-    // Dynamically allocate result vector and preallocate it to 0.0
-    double* result = (double*) calloc(m, sizeof(double));
-    if (!result) {
-        fprintf(stderr, "Memory allocation failed\n");
-        exit(EXIT_FAILURE);
-    }
-    
+void matrix_vector_product(double* matrix, double* vector, double* result, int m) {
+    memset(result, 0, m * sizeof(double));  // Zero out the result array
+
     // Perform matrix-vector multiplication
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < m; j++) {
             result[i] += matrix[i * m + j] * vector[j];
         }
     }
-    
-    return result;
 }
 
-/** Seed the random number generator with entropy from /dev/urandom
- */
+/** Seed the random number generator with entropy from /dev/urandom */
 void seed_random() {
     int fd = open("/dev/urandom", O_RDONLY);
     unsigned int seed;
@@ -56,6 +50,10 @@ double random_double() {
     return ((double) random() / (double) RAND_MAX * MAX);
 }
 
+double calculate_time(Stopwatch timer) {
+    return (timer.stop.tv_sec - timer.start.tv_sec) + (timer.stop.tv_nsec - timer.start.tv_nsec) / 1e9;
+}
+
 /**
  * Main function
  * @param argc: Number of arguments
@@ -65,56 +63,74 @@ double random_double() {
 int main(int argc, char** argv) {
     // Declare and parse arguments to their variables
     unsigned long long m;
-    if (argc < 2) {
-        printf("Usage: %s <vector_dimension>\n", argv[0]);
+    int num_runs;
+    if (argc < 3) {
+        printf("Usage: %s <vector dimension> <number of runs to average>\n", argv[0]);
         return -1;
     }
     sscanf(argv[1], "%llu", &m);
+    sscanf(argv[2], "%d", &num_runs);
 
-    // Declare our timer variables
-    Stopwatch timer;
-    double local_time;
+    // Dynamically allocate memory for matrix, vector, and result
+    double* matrix = (double*) malloc(m * m * sizeof(double));
+    double* vector = (double*) malloc(m * sizeof(double));
+    double* result = (double*) malloc(m * sizeof(double));
+
+    if (!matrix || !vector || !result) {
+        fprintf(stderr, "Memory allocation failed: matrices/vector!\n");
+        exit(EXIT_FAILURE);
+    }
 
     // Seed the random number generator
     seed_random();
 
-    // Dynamically allocate memory for matrix and vector
-    double* matrix = (double*) malloc(m * m * sizeof(double));
-    double* vector = (double*) malloc(m * sizeof(double));
-
-    if (!matrix || !vector) {
-        fprintf(stderr, "Memory allocation failed\n");
-        exit(EXIT_FAILURE);
-    }
-
-    // Fill the matrix and vector with random numbers
+    // Fill the matrix with random doubles between 0 and MAX
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < m; j++) {
             matrix[i * m + j] = random_double();
         }
     }
-    
+
+    // Fill the vector with random doubles between 0 and MAX
     for (int i = 0; i < m; i++) {
         vector[i] = random_double();
     }
 
-    // Start timer
-    clock_gettime(CLOCK_MONOTONIC, &timer.start);
+    // Declare our timer variables
+    Stopwatch *timers = (Stopwatch*) malloc(num_runs * sizeof(Stopwatch));
+    if (!timers) {
+        fprintf(stderr, "Memory allocation failed: timers!\n");
+        exit(EXIT_FAILURE);
+    }
 
-    // Multiply the matrix by the vector
-    double *result = matrix_vector_product(matrix, vector, m);
+    // Perform matrix-vector multiplication num_runs times
+    for (int i = 0; i < num_runs; i++) {
+        // Start timer
+        clock_gettime(CLOCK_MONOTONIC, &timers[i].start);
 
-    // Stop timer
-    clock_gettime(CLOCK_MONOTONIC, &timer.stop);
-    local_time = (timer.stop.tv_sec - timer.start.tv_sec) + (timer.stop.tv_nsec - timer.start.tv_nsec) / 1e9;
+        // Multiply the matrix by the vector, using the pre-allocated result array
+        matrix_vector_product(matrix, vector, result, m);
+
+        // Stop timer
+        clock_gettime(CLOCK_MONOTONIC, &timers[i].stop);
+        timers[i].time = calculate_time(timers[i]);
+    }
+
+    // Calculate the average time taken
+    double avg_time = 0.0;
+    for (int i = 0; i < num_runs; i++) {
+        avg_time += timers[i].time;
+    }
+    avg_time /= num_runs;
 
     // Print results
-    printf("Serial Function\t%s\nVector Dimension\t%llu\nTime\t\t\t%lf seconds\n\n", "Matrix-Vector Product", m, local_time);
+    printf("Serial Matrix-Vector Product\nVector Dimension:\t%llu\nAverage Time:\t%lf seconds\n\n", m, avg_time);
 
     // Free dynamically allocated memory
     free(matrix);
     free(vector);
     free(result);
+    free(timers);
 
     return 0;
 }
