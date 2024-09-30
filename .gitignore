@@ -52,4 +52,7 @@ Mkfile.old
 dkms.conf
 
 .vscode
-*
+q1
+q1m
+test_rand
+test_randd
