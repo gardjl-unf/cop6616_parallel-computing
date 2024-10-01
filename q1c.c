@@ -42,9 +42,6 @@
 #include <time.h>
 #include <string.h>
 
-// mpicc q1c.c -o q1c
-// mpirun -n 32 ./q1c 25000 100
-
 // Struct to store start and stop times
 typedef struct {
     struct timespec start;
@@ -102,7 +99,7 @@ void matrix_vector_product(int* matrix, int* vector, int* result, int rows, int 
  */
 void local_matrix_vector_product(int* local_matrix, int* vector, int* local_result, int rows, int cols) {
     for (int i = 0; i < rows; i++) {
-        local_result[i] = 0.0;
+        local_result[i] = 0;
         for (int j = 0; j < cols; j++) {
             local_result[i] += local_matrix[i * cols + j] * vector[j];
         }
@@ -120,36 +117,30 @@ double amdahl_speedup(int p, double f_parallel) {
 
 int main(int argc, char** argv) {
     int rank = 0, size = 1;
-    // Check for correct number of arguments
+
+    MPI_Init(&argc, &argv); // Initialize MPI environment
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
+    MPI_Comm_size(MPI_COMM_WORLD, &size); // Get the total number of processes
+
     if (argc < 3) {
         if (rank == 0) {
             printf("Usage: %s <vector dimension> <number of runs to average>\n", argv[0]);
         }
+        MPI_Finalize();
         return -1;
     }
 
-    // Declare and parse arguments to their variables
+    // Parse arguments
     int num_runs;
     unsigned int m;
-
-    MPI_Init(&argc, &argv); // Initialize MPI environment
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
-    MPI_Comm_size(MPI_COMM_WORLD, &size); // Get the total number of processes    
-
     sscanf(argv[1], "%d", &m);
     sscanf(argv[2], "%d", &num_runs);
 
-    // Allocate memory for matrix, vector, and results
-    int* matrix = NULL;
+    // Allocate memory for vector and results
     int* vector = (int*) malloc(m * sizeof(int));
     int* result_s = NULL;
     int* result_m = NULL;
-
-    if (!vector) {
-        fprintf(stderr, "Memory allocation failed: vector!\n");
-        MPI_Finalize();
-        exit(EXIT_FAILURE);
-    }
+    int* matrix = NULL;
 
     if (rank == 0) {
         matrix = (int*) malloc(m * m * sizeof(int));
@@ -175,41 +166,67 @@ int main(int argc, char** argv) {
     // Broadcast the vector to all processes
     MPI_Bcast(vector, m, MPI_INT, 0, MPI_COMM_WORLD);
 
-    Stopwatch stopwatches[2]; // One for SERIAL, one for PARALLEL
-    double total_serial_time = 0.0;
-    double total_parallel_time = 0.0;
-
-    if (rank == 0) {
-        // Serial run
-        clock_gettime(CLOCK_MONOTONIC, &stopwatches[SERIAL].start);
-        for (int run = 0; run < num_runs; run++) {
-            matrix_vector_product(matrix, vector, result_s, m, m);
-        }
-        clock_gettime(CLOCK_MONOTONIC, &stopwatches[SERIAL].stop);
-        total_serial_time = calculate_time(stopwatches[SERIAL]) / num_runs;
-    }
-
-    // Parallel run
+    // Determine the number of rows for each process
     int rows_per_proc = m / size;
     int remainder = m % size;
     int local_rows = (rank < remainder) ? rows_per_proc + 1 : rows_per_proc;
+
+    // Allocate memory for local matrix and local result
     int* local_matrix = (int*) malloc(local_rows * m * sizeof(int));
     int* local_result = (int*) malloc(local_rows * sizeof(int));
 
-    // Scatter the matrix to all processes
-    MPI_Scatter(matrix, local_rows * m, MPI_INT, local_matrix, local_rows * m, MPI_INT, 0, MPI_COMM_WORLD);
+    if (!local_matrix || !local_result) {
+        fprintf(stderr, "Memory allocation failed for rank %d!\n", rank);
+        MPI_Finalize();
+        exit(EXIT_FAILURE);
+    }
 
+    // Manually send the matrix to each process
+    if (rank == 0) {
+        int offset = local_rows * m;  // The starting point for rank 0
+        for (int r = 1; r < size; r++) {
+            int rows_to_send = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
+            MPI_Send(matrix + offset, rows_to_send * m, MPI_INT, r, 0, MPI_COMM_WORLD);
+            offset += rows_to_send * m;
+        }
+        memcpy(local_matrix, matrix, local_rows * m * sizeof(int));
+    } else {
+        // Non-root processes receive their portion of the matrix
+        MPI_Recv(local_matrix, local_rows * m, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    }
+
+    // Perform parallel matrix-vector multiplication
+    Stopwatch stopwatches[2];
     clock_gettime(CLOCK_MONOTONIC, &stopwatches[PARALLEL].start);
     for (int run = 0; run < num_runs; run++) {
         local_matrix_vector_product(local_matrix, vector, local_result, local_rows, m);
     }
     clock_gettime(CLOCK_MONOTONIC, &stopwatches[PARALLEL].stop);
-    total_parallel_time = calculate_time(stopwatches[PARALLEL]) / num_runs;
+    double total_parallel_time = calculate_time(stopwatches[PARALLEL]) / num_runs;
 
-    // Gather results from all processes
-    MPI_Gather(local_result, local_rows, MPI_INT, result_m, local_rows, MPI_INT, 0, MPI_COMM_WORLD);
+    // Rank 0 gathers the results from all processes
+    int* recvcounts = (int*) malloc(size * sizeof(int));  // Array to store the number of elements to gather from each process
+    int* displs = (int*) malloc(size * sizeof(int));      // Array to store the displacements for gathering
+    int offset = 0;
 
+    for (int r = 0; r < size; r++) {
+        recvcounts[r] = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
+        recvcounts[r] *= 1;  // Multiply by 1 for 1D vector gathering
+        displs[r] = offset;
+        offset += recvcounts[r];
+    }
+
+    MPI_Gatherv(local_result, local_rows, MPI_INT, result_m, recvcounts, displs, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Serial run and comparison
     if (rank == 0) {
+        clock_gettime(CLOCK_MONOTONIC, &stopwatches[SERIAL].start);
+        for (int run = 0; run < num_runs; run++) {
+            matrix_vector_product(matrix, vector, result_s, m, m);
+        }
+        clock_gettime(CLOCK_MONOTONIC, &stopwatches[SERIAL].stop);
+        double total_serial_time = calculate_time(stopwatches[SERIAL]) / num_runs;
+
         // Compare results_s and result_m
         if (memcmp(result_s, result_m, m * sizeof(int)) == 0) {
             printf("Results match.\n");
@@ -225,12 +242,15 @@ int main(int argc, char** argv) {
                 total_serial_time, total_parallel_time, actual_speedup, theoretical_speedup);
     }
 
+    // Free allocated memory
     free(matrix);
     free(vector);
     free(result_s);
     free(result_m);
     free(local_matrix);
     free(local_result);
+    free(recvcounts);
+    free(displs);
 
     MPI_Finalize(); // Finalize MPI environment
     return 0;
