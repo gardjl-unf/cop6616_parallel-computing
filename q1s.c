@@ -1,3 +1,39 @@
+/**
+ * Author: Jason Gardner
+ * Date: 10/1/2024
+ * Class: COP6616 Parallel Computing
+ * Instructor: Scott Piersall
+ * Assignment: Homework 2
+ * Filename: q1s.c
+ * 
+ * THIS IS HALF OF THE REQUIRED IMPLEMENTATION FOR QUESTION 1
+ * 
+ * Description:
+ * 1. (25 points)   Please implement an MPI program in C, C++, OR Python to calculate the
+ *                  multiplication of a matrix and a vector (Using MPI Scatter and Gather). Specifically,
+ * 
+ *                  the MPI program can be implemented in the following way:
+ *                      1.  Implement a Serial code solution to compute the multiplication of a matrix and a vector.
+ *                          This is the basis for your computation of Speedup provided by parallelization. (You
+ *                      should lookup the definition of Speedup in parallel computing carefully)
+ *                      2. According to the input argument (the size of the vector) from main() function, generate
+ *                          a matrix and a vector with random integer values, where the column size of matrix should
+ *                          be equal to the size of the vector.
+ *                      3. SCATTER: According to the number of processes from the input argument, split
+ *                          the matrix into chunks (row-wise) with roughly equal size, then distribute chunks to all
+ *                          processes using “scatter”. Additionally, the vector can be broadcasted to all processes.
+ *                      4. Conduct product for the chunk of matrix and vector.
+ *                      5. GATHER: The final result is collected on the master node using “gather”.
+ *                      6. VERIFY CORRECTNESS: Make sure the result of your MPI code matches the
+ *                          results of your serial code.
+ *                      7. SPEEDUP: What is the speedup S of your approach? (Speedup is a specific
+ *                          measurement and you should report it correctly) Combine the answer to this with your
+ *                          experiments in the next step
+ *                      8. EXPERIMENTS: You should run experiments consisting of running problem set
+ *                          sizes over varying number of compute nodes. Discuss the relationship between increasing
+ *                          the number of nodes to Speedup S in your submitted PDF
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -7,8 +43,6 @@
 
 // gcc q1s.c -o q1s
 // ./q1s 25000 100
-
-#define MAX 100000.0
 
 // Struct to store start and stop times
 typedef struct {
@@ -61,14 +95,15 @@ double calculate_time(Stopwatch timer) {
  * @return: 0 if successful
  */
 int main(int argc, char** argv) {
-    // Declare and parse arguments to their variables
-    unsigned int m;
-    int num_runs;
-
+    // Check for correct number of arguments
     if (argc < 3) {
         printf("Usage: %s <vector dimension> <number of runs to average>\n", argv[0]);
         return -1;
     }
+
+    // Declare and parse arguments to their variables
+    unsigned int m;
+    int num_runs;
 
     sscanf(argv[1], "%i", &m);
     sscanf(argv[2], "%d", &num_runs);
@@ -83,44 +118,38 @@ int main(int argc, char** argv) {
         exit(EXIT_FAILURE);
     }
 
-    // Seed the random number generator
+    // Seed the random number generator and fill the matrix and vector
     seed_random();
-
-    // Fill the matrix with random integers between 0 and RAND_MAX
     for (int i = 0; i < m; i++) {
         for (int j = 0; j < m; j++) {
             matrix[i * m + j] = rand();
         }
-    }
-
-    // Fill the vector with random integers between 0 and RAND_MAX
-    for (int i = 0; i < m; i++) {
         vector[i] = rand();
     }
 
     // Declare our timer variables
-    Stopwatch *timers = (Stopwatch*) malloc(num_runs * sizeof(Stopwatch));
-    if (!timers) {
+    Stopwatch *stopwatches = (Stopwatch*) malloc(num_runs * sizeof(Stopwatch));
+    if (!stopwatches) {
         fprintf(stderr, "Memory allocation failed: timers!\n");
         exit(EXIT_FAILURE);
     }
 
     // Perform matrix-vector multiplication num_runs times
     for (int i = 0; i < num_runs; i++) {
-        clock_gettime(CLOCK_MONOTONIC, &timers[i].start); // Start timer
+        clock_gettime(CLOCK_MONOTONIC, &stopwatches[i].start); // Start timer
 
         // Multiply the matrix by the vector, using the pre-allocated result array
         matrix_vector_product(matrix, vector, result, m, m);
 
         
-        clock_gettime(CLOCK_MONOTONIC, &timers[i].stop); // Stop timer
-        timers[i].time = calculate_time(timers[i]); // Calculate time taken
+        clock_gettime(CLOCK_MONOTONIC, &stopwatches[i].stop); // Stop timer
+        stopwatches[i].time = calculate_time(stopwatches[i]); // Calculate time taken
     }
 
     // Calculate the average time taken across all runs
     double avg_time = 0.0;
     for (int i = 0; i < num_runs; i++) {
-        avg_time += timers[i].time;
+        avg_time += stopwatches[i].time;
     }
     avg_time /= num_runs;
 
@@ -131,7 +160,7 @@ int main(int argc, char** argv) {
     free(matrix);
     free(vector);
     free(result);
-    free(timers);
+    free(stopwatches);
 
     return 0;
 }

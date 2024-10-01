@@ -52,8 +52,6 @@ Mkfile.old
 dkms.conf
 
 .vscode
-q1
 q1s
 q1m
-test_rand
-test_randd
+q1c
