@@ -4,33 +4,20 @@
  * Class: COP6616 Parallel Computing
  * Instructor: Scott Piersall
  * Assignment: Homework 2
- * Filename: q1c.c
+ * Filename: q3.c
  * 
  * THIS IS THE FULL IMPLEMENTATION OF QUESTION 1
  * 
  * Description:
- * 1. (25 points)   Please implement an MPI program in C, C++, OR Python to calculate the
- *                  multiplication of a matrix and a vector (Using MPI Scatter and Gather). Specifically,
- *                  the MPI program can be implemented in the following way:
- *                      1.  Implement a Serial code solution to compute the multiplication of a matrix and a vector.
- *                          This is the basis for your computation of Speedup provided by parallelization. (You
- *                      should lookup the definition of Speedup in parallel computing carefully)
- *                      2. According to the input argument (the size of the vector) from main() function, generate
- *                          a matrix and a vector with random integer values, where the column size of matrix should
- *                          be equal to the size of the vector.
- *                      3. SCATTER: According to the number of processes from the input argument, split
- *                          the matrix into chunks (row-wise) with roughly equal size, then distribute chunks to all
- *                          processes using “scatter”. Additionally, the vector can be broadcasted to all processes.
- *                      4. Conduct product for the chunk of matrix and vector.
- *                      5. GATHER: The final result is collected on the master node using “gather”.
- *                      6. VERIFY CORRECTNESS: Make sure the result of your MPI code matches the
- *                          results of your serial code.
- *                      7. SPEEDUP: What is the speedup S of your approach? (Speedup is a specific
- *                          measurement and you should report it correctly) Combine the answer to this with your
- *                          experiments in the next step
- *                      8. EXPERIMENTS: You should run experiments consisting of running problem set
- *                          sizes over varying number of compute nodes. Discuss the relationship between increasing
- *                          the number of nodes to Speedup S in your submitted PDF
+ * 3. (35 points)   Computing Euclidean Distance Using OpenMP or MPI
+ *                      In N-dimensional space, the Euclidean distance between two points P(p1, p2, p3,…, pn) and Q(q1, q2, q3,…, qn) is calculated as follows,  
+ *                      √((p1-q1)^2+(p2-q2)^2+⋯+(pn-qn)^2 )
+ * 
+ *                      Please write an OpenMP or MPI program to compute the Euclidean distance between two N-dimensional points, where N is at least 1 million. 
+ *                      Please initialize your vectors (denotes the two points) with random integers within a small range (0 to 99). This computation consists 
+ *                      of a fully data-parallel phase (computing the square of the difference of the components for each dimension), a reduction (adding 
+ *                      together all of these squares), and finally taking the square root of the reduced sum.
+ *
  */
 
 #include <stdio.h>
@@ -41,8 +28,11 @@
 #include <time.h>
 #include <string.h>
 
-// mpicc q1c.c -o q1c
-// mpirun -n 32 ./q1c 25000 100
+// mpicc q3.c -o q3
+// mpirun -n 32 ./q3 1000000 100
+
+#define min 0
+#define max 99
 
 // Struct to store start and stop times
 typedef struct {
@@ -50,12 +40,6 @@ typedef struct {
     struct timespec stop;
     double time;
 } Stopwatch;
-
-/** Enum for accessing stopwatch indices for clarity */
-enum {
-    SERIAL = 0,
-    PARALLEL = 1
-};
 
 /** Seed the random number generator with entropy from /dev/urandom */
 void seed_random() {
@@ -75,37 +59,11 @@ double calculate_time(Stopwatch timer) {
 }
 
 /**
- * Multiplies a matrix by a vector where the matrix has dimensions m x m and the vector has dimensions m x 1
- * @param matrix: The matrix to multiply
- * @param vector: The vector to multiply
- * @param result: The result of the multiplication
- * @param rows: The number of rows in the matrix
- * @param cols: The number of columns in the matrix
+ * Generate a random integer between MIN and MAX
+ * @return: A random integer between MIN and MAX
  */
-void matrix_vector_product(int* matrix, int* vector, int* result, int rows, int cols) {
-    memset(result, 0, rows * sizeof(int));  // Zero out the result array
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            result[i] += matrix[i * cols + j] * vector[j];
-        }
-    }
-}
-
-/**
- * Multiplies a sub-matrix (local to each process) by a vector
- * @param local_matrix: The sub-matrix (local to each process)
- * @param vector: The full vector
- * @param local_result: The result of the multiplication (local to each process)
- * @param rows: The number of rows in the sub-matrix
- * @param cols: The number of columns in the matrix (same as the length of the vector)
- */
-void local_matrix_vector_product(int* local_matrix, int* vector, int* local_result, int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        local_result[i] = 0;
-        for (int j = 0; j < cols; j++) {
-            local_result[i] += local_matrix[i * cols + j] * vector[j];
-        }
-    }
+int generate_random_int() {
+    return min + rand() % (max - min + 1);
 }
 
 /** Calculate the theoretical speedup using Amdahl's law
@@ -145,10 +103,9 @@ int main(int argc, char** argv) {
     sscanf(argv[2], "%d", &num_runs);
 
     // Allocate memory for vector and results
-    int* vector = (int*) malloc(m * sizeof(int));
-    int* result_s = NULL;
-    int* result_m = NULL;
-    int* matrix = NULL;
+    int* vector1 = (int*) malloc(m * sizeof(int));
+    int* vector2 = (int*) malloc(m * sizeof(int));
+    int result;
 
     if (rank == 0) {
         matrix = (int*) malloc(m * m * sizeof(int));

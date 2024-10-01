@@ -4,33 +4,26 @@
  * Class: COP6616 Parallel Computing
  * Instructor: Scott Piersall
  * Assignment: Homework 2
- * Filename: q1c.c
+ * Filename: q4.c
  * 
  * THIS IS THE FULL IMPLEMENTATION OF QUESTION 1
  * 
- * Description:
- * 1. (25 points)   Please implement an MPI program in C, C++, OR Python to calculate the
- *                  multiplication of a matrix and a vector (Using MPI Scatter and Gather). Specifically,
- *                  the MPI program can be implemented in the following way:
- *                      1.  Implement a Serial code solution to compute the multiplication of a matrix and a vector.
- *                          This is the basis for your computation of Speedup provided by parallelization. (You
- *                      should lookup the definition of Speedup in parallel computing carefully)
- *                      2. According to the input argument (the size of the vector) from main() function, generate
- *                          a matrix and a vector with random integer values, where the column size of matrix should
- *                          be equal to the size of the vector.
- *                      3. SCATTER: According to the number of processes from the input argument, split
- *                          the matrix into chunks (row-wise) with roughly equal size, then distribute chunks to all
- *                          processes using “scatter”. Additionally, the vector can be broadcasted to all processes.
- *                      4. Conduct product for the chunk of matrix and vector.
- *                      5. GATHER: The final result is collected on the master node using “gather”.
- *                      6. VERIFY CORRECTNESS: Make sure the result of your MPI code matches the
- *                          results of your serial code.
- *                      7. SPEEDUP: What is the speedup S of your approach? (Speedup is a specific
- *                          measurement and you should report it correctly) Combine the answer to this with your
- *                          experiments in the next step
- *                      8. EXPERIMENTS: You should run experiments consisting of running problem set
- *                          sizes over varying number of compute nodes. Discuss the relationship between increasing
- *                          the number of nodes to Speedup S in your submitted PDF
+ * 4. (35 points)  Find prime numbers using MPI. 
+ *                     Develop an MPI program to find and print the first n prime numbers in the range [0…n]. 
+ *                     Run your code using 2,4,8, and 16 nodes. 
+ *                     The MPI communication methods you choose are up to you, however….you MUST distribute the work evenly among the nodes, 
+ *                     not perform redundant or unnecessary calculations AND you should automatically skip even numbers. For your experiment, 
+ *                    use the value of 2500000 for n. Your program should print out each prime number found (and the node that found it), 
+ *                    and the master node (rank 0) should output the time elapsed for your program to run. Run the experiment for 2,4,8, 
+ *                    and 16 nodes. Graph your results. Include the graph and a paragraph interpreting and explaining your experimental 
+ *                    results in the PDF file report. Include your source code in the ZIP file for turn in.
+ * 
+ *                  Hints: There are a variety of ways to implement a solution to question 4. My hints are
+ *                  •	Do not assign contiguous blocks of numbers to each node. That does NOT distribute the work evenly among the nodes. 
+ *                      hink about this hint carefully. If you do not understand why assigning a contiguous block of numbers to each node 
+ *                      is incorrect for this problem, please come see me to discuss….seriously. Solutions submitted which just assign 
+ *                      contiguous blocks of numbers to nodes will receive zero credit
+ *                  •	MPI_Reduce is your friend for this problem……..
  */
 
 #include <stdio.h>
@@ -41,8 +34,8 @@
 #include <time.h>
 #include <string.h>
 
-// mpicc q1c.c -o q1c
-// mpirun -n 32 ./q1c 25000 100
+// mpicc q4.c -o q4
+// mpirun -n 32 ./q4 25000
 
 // Struct to store start and stop times
 typedef struct {
