@@ -27,12 +27,13 @@
 #include <unistd.h>
 #include <time.h>
 #include <string.h>
+#include <math.h>
 
 // mpicc q3.c -o q3
 // mpirun -n 32 ./q3 1000000 100
 
-#define min 0
-#define max 99
+#define MIN 0
+#define MAX 99
 
 // Struct to store start and stop times
 typedef struct {
@@ -40,6 +41,12 @@ typedef struct {
     struct timespec stop;
     double time;
 } Stopwatch;
+
+/** Enum for accessing stopwatch indices for clarity */
+enum {
+    SERIAL = 0,
+    PARALLEL = 1
+};
 
 /** Seed the random number generator with entropy from /dev/urandom */
 void seed_random() {
@@ -58,14 +65,6 @@ double calculate_time(Stopwatch timer) {
     return (timer.stop.tv_sec - timer.start.tv_sec) + (timer.stop.tv_nsec - timer.start.tv_nsec) / 1e9;
 }
 
-/**
- * Generate a random integer between MIN and MAX
- * @return: A random integer between MIN and MAX
- */
-int generate_random_int() {
-    return min + rand() % (max - min + 1);
-}
-
 /** Calculate the theoretical speedup using Amdahl's law
  * @param p: The number of processors
  * @param f_parallel: The fraction of the program that can be parallelized
@@ -76,6 +75,29 @@ double amdahl_speedup(int p, double f_parallel) {
 }
 
 /**
+ * Calculate the partial Euclidean distance between two vectors
+ * @param p: The first vector
+ * @param q: The second vector
+ * @param n: The number of dimensions
+ * @return: The partial Euclidean distance
+ */
+double euclidean_distance(int* p, int* q, int n) {
+    double sum = 0;
+    for (int i = 0; i < n; i++) {
+        sum += (p[i] - q[i]) * (p[i] - q[i]);
+    }
+    return sum;
+}
+
+/**
+ * Calculate a random vector value between MIN and MAX
+ * @return: A random vector value between MIN and MAX
+ */
+int random_vector_value() {
+    return MIN + rand() % (MAX - MIN + 1);
+}
+
+/**
  * Main function
  * @param argc: Number of arguments
  * @param argv: Array of arguments
@@ -83,112 +105,106 @@ double amdahl_speedup(int p, double f_parallel) {
  */
 int main(int argc, char** argv) {
     int rank = 0, size = 1;
+    
+    // Parse arguments
+    int num_runs;
+    unsigned int m;
+    double result_m;
+    sscanf(argv[1], "%d", &m);
+    sscanf(argv[2], "%d", &num_runs);
 
     MPI_Init(&argc, &argv); // Initialize MPI environment
     MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
     MPI_Comm_size(MPI_COMM_WORLD, &size); // Get the total number of processes
 
-    if (argc < 3) {
-        if (rank == 0) {
+    // Handle exit conditions
+    if (rank == 0) {
+        if (argc < 3) {
             printf("Usage: %s <vector dimension> <number of runs to average>\n", argv[0]);
+        if (m < 1000000) {
+            printf("Vector dimension must be at least 1 million (SEE REQUIREMENTS).\n");
         }
         MPI_Finalize();
         return -1;
     }
 
-    // Parse arguments
-    int num_runs;
-    unsigned int m;
-    sscanf(argv[1], "%d", &m);
-    sscanf(argv[2], "%d", &num_runs);
-
     // Allocate memory for vector and results
     int* vector1 = (int*) malloc(m * sizeof(int));
     int* vector2 = (int*) malloc(m * sizeof(int));
-    int result;
+    double result_s;
 
     if (rank == 0) {
-        matrix = (int*) malloc(m * m * sizeof(int));
-        result_s = (int*) malloc(m * sizeof(int));
-        result_m = (int*) malloc(m * sizeof(int));
+        double result_s;
 
-        if (!matrix || !result_s || !result_m) {
+        if (!vector1 || !vector2) {
             fprintf(stderr, "Memory allocation failed!\n");
             MPI_Finalize();
             exit(EXIT_FAILURE);
         }
 
-        // Seed the random number generator and fill the matrix and vector
+        // Seed the random number generator and fill the vectors with random values between MIN and MAX
         seed_random();
         for (int i = 0; i < m; i++) {
-            for (int j = 0; j < m; j++) {
-                matrix[i * m + j] = rand();
-            }
-            vector[i] = rand();
+            vector1[i] = random_vector_value();
+            vector2[i] = random_vector_value();
         }
     }
-
-    // Broadcast the vector to all processes
-    MPI_Bcast(vector, m, MPI_INT, 0, MPI_COMM_WORLD);
 
     // Determine the number of rows for each process
     int rows_per_proc = m / size;
     int remainder = m % size;
     int local_rows = (rank < remainder) ? rows_per_proc + 1 : rows_per_proc;
 
-    // Allocate memory for local matrix and local result
-    int* local_matrix = (int*) malloc(local_rows * m * sizeof(int));
-    int* local_result = (int*) malloc(local_rows * sizeof(int));
+    // Allocate memory for local vectors
+    int* local_vector1 = (int*) malloc(local_rows * sizeof(int));
+    int* local_vector2 = (int*) malloc(local_rows * sizeof(int));
 
-    if (!local_matrix || !local_result) {
+    if (!local_vector1 || !local_vector2) {
         fprintf(stderr, "Memory allocation failed for rank %d!\n", rank);
         MPI_Finalize();
         exit(EXIT_FAILURE);
     }
+
+    double local_result = 0.0;
 
     // Manually send the matrix to each process
     if (rank == 0) {
         int offset = local_rows * m;  // The starting point for rank 0
         for (int r = 1; r < size; r++) {
             int rows_to_send = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
-            MPI_Send(matrix + offset, rows_to_send * m, MPI_INT, r, 0, MPI_COMM_WORLD);
+            MPI_Send(vector1 + offset, rows_to_send * m, MPI_INT, r, 0, MPI_COMM_WORLD);
+            MPI_Send(vector2 + offset, rows_to_send * m, MPI_INT, r, 0, MPI_COMM_WORLD);
             offset += rows_to_send * m;
         }
-        memcpy(local_matrix, matrix, local_rows * m * sizeof(int));
+        memcpy(local_vector1, vector1, local_rows * sizeof(int));
+        memcpy(local_vector2, vector2, local_rows * sizeof(int));
     } else {
         // Non-root processes receive their portion of the matrix
-        MPI_Recv(local_matrix, local_rows * m, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(local_vector1, local_rows, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        MPI_Recv(local_vector2, local_rows, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
     }
 
     // Perform parallel matrix-vector multiplication
     Stopwatch stopwatches[2];
     clock_gettime(CLOCK_MONOTONIC, &stopwatches[PARALLEL].start);
     for (int run = 0; run < num_runs; run++) {
-        local_matrix_vector_product(local_matrix, vector, local_result, local_rows, m);
+        local_result = euclidean_distance(local_vector1, local_vector2, local_rows);
     }
     clock_gettime(CLOCK_MONOTONIC, &stopwatches[PARALLEL].stop);
     double total_parallel_time = calculate_time(stopwatches[PARALLEL]) / num_runs;
 
-    // Rank 0 gathers the results from all processes
-    int* recvcounts = (int*) malloc(size * sizeof(int));  // Array to store the number of elements to gather from each process
-    int* displs = (int*) malloc(size * sizeof(int));      // Array to store the displacements for gathering
-    int offset = 0;
+    // Gather the result values from each process
+    MPI_Reduce(&local_result, &result_m, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
-    for (int r = 0; r < size; r++) {
-        recvcounts[r] = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
-        recvcounts[r] *= 1;  // Multiply by 1 for 1D vector gathering
-        displs[r] = offset;
-        offset += recvcounts[r];
-    }
-
-    MPI_Gatherv(local_result, local_rows, MPI_INT, result_m, recvcounts, displs, MPI_INT, 0, MPI_COMM_WORLD);
+    result_m = sqrt(result_m);
 
     // Serial run and comparison
     if (rank == 0) {
         clock_gettime(CLOCK_MONOTONIC, &stopwatches[SERIAL].start);
         for (int run = 0; run < num_runs; run++) {
-            matrix_vector_product(matrix, vector, result_s, m, m);
+            result_s = euclidean_distance(vector1, vector2, m);
         }
+        result_s = sqrt(result_s);
         clock_gettime(CLOCK_MONOTONIC, &stopwatches[SERIAL].stop);
         double total_serial_time = calculate_time(stopwatches[SERIAL]) / num_runs;
 
@@ -208,14 +224,10 @@ int main(int argc, char** argv) {
     }
 
     // Free allocated memory
-    free(matrix);
-    free(vector);
-    free(result_s);
-    free(result_m);
-    free(local_matrix);
-    free(local_result);
-    free(recvcounts);
-    free(displs);
+    free(vector1);
+    free(vector2);
+    free(local_vector1);
+    free(local_vector2);
 
     MPI_Finalize(); // Finalize MPI environment
     return 0;
