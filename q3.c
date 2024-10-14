@@ -230,8 +230,8 @@ int main(int argc, char** argv) {
         double theoretical_speedup = amdahl_speedup(size);
         double speedup_ratio = (actual_speedup / theoretical_speedup) * 100;
 
-        printf("Average Serial Time:\t\t\t%lf s\n", average_serial_time);
-        printf("Average Parallel Time:\t\t\t%lf s\n", average_parallel_time);
+        printf("Average Serial Time:\t\t\t%lfs\n", average_serial_time);
+        printf("Average Parallel Time:\t\t\t%lfs\n", average_parallel_time);
         printf("Theoretical Speedup [Amdahl's Law]:\t%lf\n", theoretical_speedup);
         printf("Actual Speedup:\t\t\t\t%lf\n", actual_speedup);
         printf("Speedup Efficiency:\t\t\t%lf%%\n", speedup_ratio);

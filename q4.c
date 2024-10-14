@@ -139,6 +139,8 @@ int main(int argc, char** argv) {
             primes_global = (int*) malloc(n * sizeof(int));
             recvcounts = (int*) malloc(size * sizeof(int));
             displs = (int*) malloc(size * sizeof(int));
+
+            primes_global[0] = 2;  // 2 is the only even prime
         }
 
         // Gather counts of primes from each process
@@ -177,6 +179,9 @@ int main(int argc, char** argv) {
                     fprintf(stderr, "Error opening file %s for writing.\n", filename);
                     exit(EXIT_FAILURE);
                 }
+
+                // Add 2 to the file
+                fprintf(fp, "%s", "2 ");
 
                 for (int i = 0; i < total_primes; i++) {
                     fprintf(fp, "%d ", primes_global[i]);
@@ -222,8 +227,9 @@ int main(int argc, char** argv) {
                 double theoretical_speedup = amdahl_speedup(size);
                 double speedup_ratio = (actual_speedup / theoretical_speedup) * 100;
 
-                printf("Average Serial Time:\t\t\t%lf s\n", average_serial_time);
-                printf("Average Parallel Time:\t\t\t%lf s\n", average_parallel_time);
+                printf("Number of Primes Found to %d:\t%d\n", n, displs[size - 1] + recvcounts[size - 1] + 1);
+                printf("Average Serial Time:\t\t\t%lfs\n", average_serial_time);
+                printf("Average Parallel Time:\t\t\t%lfs\n", average_parallel_time);
                 printf("Theoretical Speedup [Amdahl's Law]:\t%lf\n", theoretical_speedup);
                 printf("Actual Speedup:\t\t\t\t%lf\n", actual_speedup);
                 printf("Speedup Efficiency:\t\t\t%lf%%\n", speedup_ratio);
