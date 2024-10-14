@@ -26,37 +26,36 @@
  *                  •	MPI_Reduce is your friend for this problem……..
  */
 
+// mpicc -lm q4.c -o q4
+// mpirun -n 2 ./q4 2500000 100
+// mpirun -n 4 ./q4 2500000 100
+// mpirun -n 8 ./q4 2500000 100
+// mpirun -n 16 ./q4 2500000 100
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <mpi.h>
-#include <fcntl.h>
-#include <unistd.h>
+#include <math.h>
 #include <time.h>
-#include <string.h>
+#include <stdlib.h>
 
-// mpicc q4.c -o q4
-// mpirun -n 32 ./q4 25000
+#define TOLERANCE 0.0001
+#define PARALLELIZABLE_FRACTION 0.99  // Assumed parallelizable portion for Amdahl's law
 
 // Struct to store start and stop times
 typedef struct {
     struct timespec start;
     struct timespec stop;
-    double time;
 } Stopwatch;
 
-/** Enum for accessing stopwatch indices for clarity */
-enum {
-    SERIAL = 0,
-    PARALLEL = 1
-};
-
-/** Seed the random number generator with entropy from /dev/urandom */
-void seed_random() {
-    int fd = open("/dev/urandom", O_RDONLY);
-    unsigned int seed;
-    read(fd, &seed, sizeof(seed));
-    close(fd);
-    srandom(seed);
+/** Check if a number is prime */
+int is_prime(int num) {
+    if (num < 2) return 0;
+    if (num % 2 == 0) return num == 2;  // 2 is the only even prime
+    for (int i = 3; i <= sqrt(num); i += 2) {
+        if (num % i == 0) return 0;
+    }
+    return 1;
 }
 
 /** Calculate time in seconds
@@ -67,47 +66,16 @@ double calculate_time(Stopwatch timer) {
     return (timer.stop.tv_sec - timer.start.tv_sec) + (timer.stop.tv_nsec - timer.start.tv_nsec) / 1e9;
 }
 
-/**
- * Multiplies a matrix by a vector where the matrix has dimensions m x m and the vector has dimensions m x 1
- * @param matrix: The matrix to multiply
- * @param vector: The vector to multiply
- * @param result: The result of the multiplication
- * @param rows: The number of rows in the matrix
- * @param cols: The number of columns in the matrix
- */
-void matrix_vector_product(int* matrix, int* vector, int* result, int rows, int cols) {
-    memset(result, 0, rows * sizeof(int));  // Zero out the result array
-    for (int i = 0; i < rows; i++) {
-        for (int j = 0; j < cols; j++) {
-            result[i] += matrix[i * cols + j] * vector[j];
-        }
-    }
+/** Calculate the theoretical speedup using Amdahl's law */
+double amdahl_speedup(int p) {
+    return 1.0 / ((1.0 - PARALLELIZABLE_FRACTION) + (PARALLELIZABLE_FRACTION / p));
 }
 
-/**
- * Multiplies a sub-matrix (local to each process) by a vector
- * @param local_matrix: The sub-matrix (local to each process)
- * @param vector: The full vector
- * @param local_result: The result of the multiplication (local to each process)
- * @param rows: The number of rows in the sub-matrix
- * @param cols: The number of columns in the matrix (same as the length of the vector)
- */
-void local_matrix_vector_product(int* local_matrix, int* vector, int* local_result, int rows, int cols) {
-    for (int i = 0; i < rows; i++) {
-        local_result[i] = 0;
-        for (int j = 0; j < cols; j++) {
-            local_result[i] += local_matrix[i * cols + j] * vector[j];
-        }
-    }
-}
-
-/** Calculate the theoretical speedup using Amdahl's law
- * @param p: The number of processors
- * @param f_parallel: The fraction of the program that can be parallelized
- * @return: The theoretical speedup
- */
-double amdahl_speedup(int p, double f_parallel) {
-    return 1.0 / ((1.0 - f_parallel) + (f_parallel / p));
+// Comparison function for qsort (ascending order)
+int compare_ints(const void* a, const void* b) {
+    int int_a = *((int*)a);
+    int int_b = *((int*)b);
+    return (int_a > int_b) - (int_a < int_b);  // Returns -1, 0, or 1 for sorting
 }
 
 /**
@@ -117,141 +85,151 @@ double amdahl_speedup(int p, double f_parallel) {
  * @return: 0 if successful
  */
 int main(int argc, char** argv) {
-    int rank = 0, size = 1;
+    int rank, size;
 
     MPI_Init(&argc, &argv); // Initialize MPI environment
     MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
     MPI_Comm_size(MPI_COMM_WORLD, &size); // Get the total number of processes
 
+    // Handle exit conditions
     if (argc < 3) {
         if (rank == 0) {
-            printf("Usage: %s <vector dimension> <number of runs to average>\n", argv[0]);
+            printf("Usage: %s <upper bound n> <num_runs>\n", argv[0]);
         }
         MPI_Finalize();
         return -1;
     }
 
     // Parse arguments
+    unsigned int n;
     int num_runs;
-    unsigned int m;
-    sscanf(argv[1], "%d", &m);
+    sscanf(argv[1], "%u", &n);
     sscanf(argv[2], "%d", &num_runs);
 
-    // Allocate memory for vector and results
-    int* vector = (int*) malloc(m * sizeof(int));
-    int* result_s = NULL;
-    int* result_m = NULL;
-    int* matrix = NULL;
+    // Variables for tracking time
+    double total_parallel_time = 0;
+    double total_serial_time = 0;
 
-    if (rank == 0) {
-        matrix = (int*) malloc(m * m * sizeof(int));
-        result_s = (int*) malloc(m * sizeof(int));
-        result_m = (int*) malloc(m * sizeof(int));
-
-        if (!matrix || !result_s || !result_m) {
-            fprintf(stderr, "Memory allocation failed!\n");
-            MPI_Finalize();
-            exit(EXIT_FAILURE);
-        }
-
-        // Seed the random number generator and fill the matrix and vector
-        seed_random();
-        for (int i = 0; i < m; i++) {
-            for (int j = 0; j < m; j++) {
-                matrix[i * m + j] = rand();
-            }
-            vector[i] = rand();
-        }
-    }
-
-    // Broadcast the vector to all processes
-    MPI_Bcast(vector, m, MPI_INT, 0, MPI_COMM_WORLD);
-
-    // Determine the number of rows for each process
-    int rows_per_proc = m / size;
-    int remainder = m % size;
-    int local_rows = (rank < remainder) ? rows_per_proc + 1 : rows_per_proc;
-
-    // Allocate memory for local matrix and local result
-    int* local_matrix = (int*) malloc(local_rows * m * sizeof(int));
-    int* local_result = (int*) malloc(local_rows * sizeof(int));
-
-    if (!local_matrix || !local_result) {
-        fprintf(stderr, "Memory allocation failed for rank %d!\n", rank);
-        MPI_Finalize();
-        exit(EXIT_FAILURE);
-    }
-
-    // Manually send the matrix to each process
-    if (rank == 0) {
-        int offset = local_rows * m;  // The starting point for rank 0
-        for (int r = 1; r < size; r++) {
-            int rows_to_send = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
-            MPI_Send(matrix + offset, rows_to_send * m, MPI_INT, r, 0, MPI_COMM_WORLD);
-            offset += rows_to_send * m;
-        }
-        memcpy(local_matrix, matrix, local_rows * m * sizeof(int));
-    } else {
-        // Non-root processes receive their portion of the matrix
-        MPI_Recv(local_matrix, local_rows * m, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    }
-
-    // Perform parallel matrix-vector multiplication
-    Stopwatch stopwatches[2];
-    clock_gettime(CLOCK_MONOTONIC, &stopwatches[PARALLEL].start);
     for (int run = 0; run < num_runs; run++) {
-        local_matrix_vector_product(local_matrix, vector, local_result, local_rows, m);
-    }
-    clock_gettime(CLOCK_MONOTONIC, &stopwatches[PARALLEL].stop);
-    double total_parallel_time = calculate_time(stopwatches[PARALLEL]) / num_runs;
+        Stopwatch parallel_timer, serial_timer;
 
-    // Rank 0 gathers the results from all processes
-    int* recvcounts = (int*) malloc(size * sizeof(int));  // Array to store the number of elements to gather from each process
-    int* displs = (int*) malloc(size * sizeof(int));      // Array to store the displacements for gathering
-    int offset = 0;
+        // Start timing for parallel execution
+        clock_gettime(CLOCK_MONOTONIC, &parallel_timer.start);
 
-    for (int r = 0; r < size; r++) {
-        recvcounts[r] = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
-        recvcounts[r] *= 1;  // Multiply by 1 for 1D vector gathering
-        displs[r] = offset;
-        offset += recvcounts[r];
-    }
+        // Each node will gather primes it finds in its portion
+        int* primes_local = (int*) malloc(n * sizeof(int));
+        int prime_count = 0;
 
-    MPI_Gatherv(local_result, local_rows, MPI_INT, result_m, recvcounts, displs, MPI_INT, 0, MPI_COMM_WORLD);
-
-    // Serial run and comparison
-    if (rank == 0) {
-        clock_gettime(CLOCK_MONOTONIC, &stopwatches[SERIAL].start);
-        for (int run = 0; run < num_runs; run++) {
-            matrix_vector_product(matrix, vector, result_s, m, m);
-        }
-        clock_gettime(CLOCK_MONOTONIC, &stopwatches[SERIAL].stop);
-        double total_serial_time = calculate_time(stopwatches[SERIAL]) / num_runs;
-
-        // Compare results_s and result_m
-        if (memcmp(result_s, result_m, m * sizeof(int)) == 0) {
-            printf("Results match.\n");
-        } else {
-            printf("Results do not match!\n");
+        // Interleaved work distribution across nodes
+        for (int i = 3 + 2 * rank; i <= n; i += 2 * size) {
+            if (is_prime(i)) {
+                primes_local[prime_count++] = i;
+                if (run == num_runs -1) {
+                    printf("Node %d found prime: %d\n", rank, i);
+                }
+            }
         }
 
-        // Calculate actual and theoretical speedup
-        double actual_speedup = total_serial_time / total_parallel_time;
-        double theoretical_speedup = amdahl_speedup(size, 0.9); // Assuming 90% of the code is parallelizable
+        // Collect results to rank 0
+        int* primes_global = NULL;
+        int* recvcounts = NULL;
+        int* displs = NULL;
 
-        printf("Serial Time: %lf\nParallel Time: %lf\nActual Speedup: %lf\nTheoretical Speedup (Amdahl's Law): %lf\n",
-                total_serial_time, total_parallel_time, actual_speedup, theoretical_speedup);
+        if (rank == 0) {
+            primes_global = (int*) malloc(n * sizeof(int));
+            recvcounts = (int*) malloc(size * sizeof(int));
+            displs = (int*) malloc(size * sizeof(int));
+        }
+
+        // Gather counts of primes from each process
+        MPI_Gather(&prime_count, 1, MPI_INT, recvcounts, 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+        // Set up displacements for gathering the actual primes into primes_global on rank 0
+        if (rank == 0) {
+            int offset = 0;
+            for (int i = 0; i < size; i++) {
+                displs[i] = offset;
+                offset += recvcounts[i];
+            }
+        }
+
+        // Gather all primes to rank 0
+        MPI_Gatherv(primes_local, prime_count, MPI_INT, primes_global, recvcounts, displs, MPI_INT, 0, MPI_COMM_WORLD);
+
+        // Stop timing for parallel execution
+        clock_gettime(CLOCK_MONOTONIC, &parallel_timer.stop);
+        total_parallel_time += calculate_time(parallel_timer);
+
+        // Let's sort the prime numbers and write them to a file, as a treat for me
+        if (rank == 0) {
+            if (run == num_runs - 1) {
+                // Sort primes before writing to file
+                int total_primes = displs[size - 1] + recvcounts[size - 1];
+                qsort(primes_global, total_primes, sizeof(int), compare_ints);
+
+                // Write sorted primes to file primes_to_n.txt
+                FILE *fp;
+                char filename[30];
+                sprintf(filename, "primes_to_%d.txt", n);
+                fp = fopen(filename, "w");
+
+                if (fp == NULL) {
+                    fprintf(stderr, "Error opening file %s for writing.\n", filename);
+                    exit(EXIT_FAILURE);
+                }
+
+                for (int i = 0; i < total_primes; i++) {
+                    fprintf(fp, "%d ", primes_global[i]);
+                }
+
+                fclose(fp);
+
+                // Free dynamically allocated memory on rank 0
+                free(primes_global);
+                free(recvcounts);
+                free(displs);
+            }
+        }
+        
+        // Free dynamically allocated memory on all nodes
+        free(primes_local);
+
+        // Start timing for serial execution
+        if (rank == 0) {
+            clock_gettime(CLOCK_MONOTONIC, &serial_timer.start);
+
+            int* serial_primes = (int*) malloc(n * sizeof(int));
+            int serial_prime_count = 0;
+
+            for (int i = 3; i <= n; i += 2) {
+                if (is_prime(i)) {
+                    serial_primes[serial_prime_count++] = i;
+                }
+            }
+
+            clock_gettime(CLOCK_MONOTONIC, &serial_timer.stop);
+            total_serial_time += calculate_time(serial_timer);
+
+            free(serial_primes);
+        }
+        if (run == num_runs -1) {
+            // Calculate average times
+            double average_parallel_time = total_parallel_time / num_runs;
+            double average_serial_time = total_serial_time / num_runs;
+            // Output results and speedup calculations on rank 0
+            if (rank == 0) {
+                double actual_speedup = average_serial_time / average_parallel_time;
+                double theoretical_speedup = amdahl_speedup(size);
+                double speedup_ratio = (actual_speedup / theoretical_speedup) * 100;
+
+                printf("Average Serial Time:\t\t\t%lf s\n", average_serial_time);
+                printf("Average Parallel Time:\t\t\t%lf s\n", average_parallel_time);
+                printf("Theoretical Speedup [Amdahl's Law]:\t%lf\n", theoretical_speedup);
+                printf("Actual Speedup:\t\t\t\t%lf\n", actual_speedup);
+                printf("Speedup Efficiency:\t\t\t%lf%%\n", speedup_ratio);
+            }
+        }
     }
-
-    // Free allocated memory
-    free(matrix);
-    free(vector);
-    free(result_s);
-    free(result_m);
-    free(local_matrix);
-    free(local_result);
-    free(recvcounts);
-    free(displs);
 
     MPI_Finalize(); // Finalize MPI environment
     return 0;

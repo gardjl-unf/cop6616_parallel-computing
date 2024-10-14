@@ -45,19 +45,13 @@
 #include <string.h>
 
 #define TOLERANCE 0.0001
+#define PARALLELIZABLE_FRACTION 0.95
 
-// Struct to store start and stop times and calculate time difference
+// Struct to store start and stop times
 typedef struct {
     struct timespec start;
     struct timespec stop;
-    double time;
 } Stopwatch;
-
-/** Enum for accessing stopwatch indices for clarity */
-enum {
-    SERIAL = 0,
-    PARALLEL = 1
-};
 
 /** Seed the random number generator with entropy from /dev/urandom */
 void seed_random() {
@@ -110,13 +104,9 @@ void local_matrix_vector_product(int* local_matrix, int* vector, int* local_resu
     }
 }
 
-/** Calculate the theoretical speedup using Amdahl's law
- * @param p: The number of processors
- * @param f_parallel: The fraction of the program that can be parallelized
- * @return: The theoretical speedup
- */
-double amdahl_speedup(int p, double f_parallel) {
-    return 1.0 / ((1.0 - f_parallel) + (f_parallel / p));
+/** Calculate the theoretical speedup using Amdahl's law */
+double amdahl_speedup(int p) {
+    return 1.0 / ((1.0 - PARALLELIZABLE_FRACTION) + (PARALLELIZABLE_FRACTION / p));
 }
 
 /**
@@ -164,7 +154,7 @@ int main(int argc, char** argv) {
             exit(EXIT_FAILURE);
         }
 
-        // Seed the random number generator and fill the matrix and vector
+// Seed the random number generator and fill the matrix and vector
         seed_random();
         for (int i = 0; i < m; i++) {
             for (int j = 0; j < m; j++) {
@@ -174,111 +164,110 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Broadcast the vector to all processes
-    MPI_Bcast(vector, m, MPI_INT, 0, MPI_COMM_WORLD);
-
-    // Determine the number of rows for each process
-    int rows_per_proc = m / size;
-    int remainder = m % size;
-    int local_rows = (rank < remainder) ? rows_per_proc + 1 : rows_per_proc;
-
-    // Allocate memory for local matrix and local result
-    int* local_matrix = (int*) malloc(local_rows * m * sizeof(int));
-    int* local_result = (int*) malloc(local_rows * sizeof(int));
-
-    if (!local_matrix || !local_result) {
-        fprintf(stderr, "Memory allocation failed for rank %d!\n", rank);
-        MPI_Finalize();
-        exit(EXIT_FAILURE);
-    }
-
-    // Manually send the matrix to each process
-    if (rank == 0) {
-        int offset = local_rows * m;
-        for (int r = 1; r < size; r++) {
-            int rows_to_send = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
-            MPI_Send(matrix + offset, rows_to_send * m, MPI_INT, r, 0, MPI_COMM_WORLD);
-            offset += rows_to_send * m;
-        }
-        memcpy(local_matrix, matrix, local_rows * m * sizeof(int));
-    } else {
-    // Non-root processes receive their portion of the matrix
-        MPI_Recv(local_matrix, local_rows * m, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    }
-
+    // Variables for tracking time
     double total_parallel_time = 0;
-    // Perform parallel matrix-vector multiplication over num_runs
+    double total_serial_time = 0;
+
+    // Repeat calculations num_runs times
     for (int run = 0; run < num_runs; run++) {
-        Stopwatch parallel_timer;
+        Stopwatch parallel_timer, serial_timer;
+
+        // Start parallel timing
         clock_gettime(CLOCK_MONOTONIC, &parallel_timer.start);
 
+        // Distribute the vector to all processes
+        MPI_Bcast(vector, m, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Scatter portions of the matrix to each process manually
+        int rows_per_proc = m / size;
+        int remainder = m % size;
+        int local_rows = (rank < remainder) ? rows_per_proc + 1 : rows_per_proc;
+
+        int* local_matrix = (int*) malloc(local_rows * m * sizeof(int));
+        int* local_result = (int*) malloc(local_rows * sizeof(int));
+
+        if (!local_matrix || !local_result) {
+            fprintf(stderr, "Memory allocation failed for rank %d!\n", rank);
+            MPI_Finalize();
+            exit(EXIT_FAILURE);
+        }
+
+        if (rank == 0) {
+            int offset = local_rows * m;
+            for (int r = 1; r < size; r++) {
+                int rows_to_send = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
+                MPI_Send(matrix + offset, rows_to_send * m, MPI_INT, r, 0, MPI_COMM_WORLD);
+                offset += rows_to_send * m;
+            }
+            memcpy(local_matrix, matrix, local_rows * m * sizeof(int));
+        } else {
+            MPI_Recv(local_matrix, local_rows * m, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+        }
+
+        // Perform parallel calculation
         local_matrix_vector_product(local_matrix, vector, local_result, local_rows, m);
 
+        // Gather results into root process
+        if (rank == 0) {
+            memcpy(result_m, local_result, local_rows * sizeof(int));
+            int offset = local_rows;
+            for (int r = 1; r < size; r++) {
+                int rows_to_receive = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
+                MPI_Recv(result_m + offset, rows_to_receive, MPI_INT, r, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                offset += rows_to_receive;
+            }
+        } else {
+            MPI_Send(local_result, local_rows, MPI_INT, 0, 0, MPI_COMM_WORLD);
+        }
+
+        // Stop parallel timing
         clock_gettime(CLOCK_MONOTONIC, &parallel_timer.stop);
         total_parallel_time += calculate_time(parallel_timer);
-    }
 
-    double average_parallel_time = total_parallel_time / num_runs;
-    double max_parallel_time;
-    MPI_Reduce(&average_parallel_time, &max_parallel_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-
-    int* recvcounts = (int*) malloc(size * sizeof(int)); // Array to store the number of elements to gather from each process
-    int* displs = (int*) malloc(size * sizeof(int)); // Array to store the displacements for gathering
-    int offset = 0;
-
-    for (int r = 0; r < size; r++) {
-        recvcounts[r] = (r < remainder) ? (rows_per_proc + 1) : rows_per_proc;
-        displs[r] = offset;
-        offset += recvcounts[r];
-    }
-
-    MPI_Gatherv(local_result, local_rows, MPI_INT, result_m, recvcounts, displs, MPI_INT, 0, MPI_COMM_WORLD);
-
-    // Serial run and comparison
-    if (rank == 0) {
-        double total_serial_time = 0;
-
-        for (int run = 0; run < num_runs; run++) {
-            Stopwatch serial_timer;
+        // Start serial timing (only on root process)
+        if (rank == 0) {
             clock_gettime(CLOCK_MONOTONIC, &serial_timer.start);
 
+            // Perform serial calculation
             matrix_vector_product(matrix, vector, result_s, m, m);
 
             clock_gettime(CLOCK_MONOTONIC, &serial_timer.stop);
             total_serial_time += calculate_time(serial_timer);
+
+            // Compare results after each run
+            if (memcmp(result_s, result_m, m * sizeof(int)) != 0) {
+                printf("Results do not match in run %d!\n", run + 1);
+            }
         }
 
-        double average_serial_time = total_serial_time / num_runs;
-
-    // Compare results_s and result_m
-        if (memcmp(result_s, result_m, m * sizeof(int)) != 0) {
-            printf("Results do not match!\n");
-        } else {
-            printf("Results match!\n");
-        }
-
-        // Calculate actual and theoretical speedup
-        double actual_speedup = average_serial_time / max_parallel_time;
-        double theoretical_speedup = amdahl_speedup(size, 0.9);
-        double speedup_ratio = (actual_speedup / theoretical_speedup) * 100;
-
-        // Output results of the run
-        printf("Average Serial Time:\t\t\t%lf s\n", average_serial_time);
-        printf("Average Parallel Time:\t\t\t%lf s\n", max_parallel_time);
-        printf("Theoretical Speedup [Amdahl's Law]:\t%lf\n", theoretical_speedup);
-        printf("Actual Speedup:\t\t\t\t%lf\n", actual_speedup);
-        printf("Speedup Efficiency (Actual/Theoretical):\t%lf%%\n", speedup_ratio);
+        free(local_matrix);
+        free(local_result);
     }
 
-    // Free allocated memory
-    free(matrix);
+    // Calculate average times
+    double average_parallel_time = total_parallel_time / num_runs;
+    double average_serial_time = total_serial_time / num_runs;
+
+    // Display results and speedup calculations
+    if (rank == 0) {
+// Calculate actual and theoretical speedup
+        double actual_speedup = average_serial_time / average_parallel_time;
+        double theoretical_speedup = amdahl_speedup(size);
+        double speedup_ratio = (actual_speedup / theoretical_speedup) * 100;
+
+        printf("Average Serial Time:\t\t\t%lf s\n", average_serial_time);
+        printf("Average Parallel Time:\t\t\t%lf s\n", average_parallel_time);
+        printf("Theoretical Speedup [Amdahl's Law]:\t%lf\n", theoretical_speedup);
+        printf("Actual Speedup:\t\t\t\t%lf\n", actual_speedup);
+        printf("Speedup Efficiency:\t\t\t%lf%%\n", speedup_ratio);
+    }
+
+    if (rank == 0) {
+        free(matrix);
+        free(result_s);
+        free(result_m);
+    }
     free(vector);
-    free(result_s);
-    free(result_m);
-    free(local_matrix);
-    free(local_result);
-    free(recvcounts);
-    free(displs);
 
     MPI_Finalize(); // Finalize MPI environment
     return 0;
