@@ -41,7 +41,6 @@
 typedef struct {
     struct timespec start;
     struct timespec stop;
-    double time;
 } Stopwatch;
 
 /** Seed the random number generator with entropy from /dev/urandom */
@@ -101,12 +100,13 @@ _Bool compare_result(double result_s, double result_m) {
  * @return: 0 if successful
  */
 int main(int argc, char** argv) {
-    int rank = 0, size = 1;
+    int rank, size;
 
     MPI_Init(&argc, &argv); // Initialize MPI environment
     MPI_Comm_rank(MPI_COMM_WORLD, &rank); // Get the rank of the process
     MPI_Comm_size(MPI_COMM_WORLD, &size); // Get the total number of processes
 
+    // Handle exit conditions
     if (argc < 3) {
         if (rank == 0) {
             printf("Usage: %s <vector dimension> <number of runs to average>\n", argv[0]);
@@ -115,6 +115,7 @@ int main(int argc, char** argv) {
         return -1;
     }
 
+    // Parse arguments
     int num_runs;
     unsigned int m;
     double result_m, result_s;
@@ -180,6 +181,7 @@ int main(int argc, char** argv) {
             memcpy(local_vector1, vector1, local_rows * sizeof(int));
             memcpy(local_vector2, vector2, local_rows * sizeof(int));
         } else {
+            // Receive local vectors from root process
             MPI_Recv(local_vector1, local_rows, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
             MPI_Recv(local_vector2, local_rows, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
         }
@@ -190,6 +192,7 @@ int main(int argc, char** argv) {
         // Reduce partial results to the root process
         MPI_Reduce(&local_result, &result_m, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
+        // Calculate the square root of the sum
         if (rank == 0) {
             result_m = sqrt(result_m);
         }

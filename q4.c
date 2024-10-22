@@ -27,10 +27,10 @@
  */
 
 // mpicc -lm q4.c -o q4
-// mpirun -n 2 ./q4 2500000 100
-// mpirun -n 4 ./q4 2500000 100
-// mpirun -n 8 ./q4 2500000 100
-// mpirun -n 16 ./q4 2500000 100
+// mpirun -n 2 ./q4 2500000 25
+// mpirun -n 4 ./q4 2500000 25
+// mpirun -n 8 ./q4 2500000 25
+// mpirun -n 16 ./q4 2500000 25
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -146,7 +146,11 @@ int main(int argc, char** argv) {
         // Gather counts of primes from each process
         MPI_Gather(&prime_count, 1, MPI_INT, recvcounts, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-        // Set up displacements for gathering the actual primes into primes_global on rank 0
+        /** Set up displacements for gathering the actual primes into primes_global on rank 0
+          * I'm still not entirely comfortable with this concept, but after a while I made it work.
+          * q1 and q3 both had this put method at one point, but I was able to work around it and
+          * find a concept that worked.  Here is the sole implementations using recvcounts and displs.
+          */
         if (rank == 0) {
             int offset = 0;
             for (int i = 0; i < size; i++) {
